@@ -75,6 +75,8 @@ ALERT_RULES = [
     # (code, label, severity, regex)
     ("NOT_BREATHING", "Possible not breathing", "critical",
      r"\b(not|isn'?t|stopped|no longer|can'?t stop) (breathing|breath)|\bno pulse\b|\bnot breathing\b"),
+    ("BREATHING_UNCERTAIN", "Breathing status uncertain - confirm", "high",
+     r"\b(don'?t think|do not think|not sure|can'?t tell|cannot tell|unsure)\b[^.?!]{0,40}\bbreath|\b(barely|hardly) breath"),
     ("UNCONSCIOUS", "Possibly unconscious", "critical",
      r"\b(unconscious|unresponsive|passed out|won'?t wake|not waking|not responding)\b"),
     ("CHEST_PAIN", "Chest pain mentioned", "high", r"\bchest (pain|hurt|hurts|hurting|pressure)\b"),
@@ -88,6 +90,7 @@ ALERT_RULES = [
 ]
 
 
+CLAUSE_BREAK = re.compile(r"[,;]|\bbut\b|\balthough\b", re.IGNORECASE)
 SPEAKER = re.compile(r"\b(Caller|Dispatcher|Call[- ]?taker|Operator)\s*:", re.IGNORECASE)
 
 
@@ -129,8 +132,8 @@ def screen(transcript):
         offset, text, m = found
         # The sentence around the match decides whether this is a negated mention.
         start = max(text.rfind(".", 0, m.start()), text.rfind("?", 0, m.start())) + 1
-        window = text[start:m.start()][-40:]
-        alert_is_itself_negative = code in {"NOT_BREATHING", "UNCONSCIOUS", "PERSON_TRAPPED"}
+        window = CLAUSE_BREAK.split(text[start:m.start()])[-1][-40:]  # "No, but his chest hurts" -> "his "
+        alert_is_itself_negative = code in {"NOT_BREATHING", "BREATHING_UNCERTAIN", "UNCONSCIOUS", "PERSON_TRAPPED"}
         is_negated = (not alert_is_itself_negative) and negated(window)
         alerts.append({
             "code": code, "label": label, "severity": "info" if is_negated else severity,
@@ -191,11 +194,33 @@ EXTRACTION_SCHEMA = {
 
 # ---------------------------------------------------------------- evidence and polarity validation
 
+def _clause_before(segment_text, nq):
+    """Normalized words of the caller's clause that come before the quote, within its sentence ("" if none)."""
+    for sentence in re.split(r"[.?!]", segment_text):
+        marked = _norm(CLAUSE_BREAK.sub(" zzclause ", sentence)).split()
+        plain = " ".join(w for w in marked if w != "zzclause")
+        i = plain.find(nq)
+        if i < 0:
+            continue
+        k, before, n = len(plain[:i].split()), [], 0
+        for w in marked:
+            if n == k:
+                break
+            if w == "zzclause":
+                before = []
+            else:
+                before.append(w)
+                n += 1
+        return " ".join(before)
+    return ""
+
+
 def validate(transcript, facts):
     """Split model facts into accepted and rejected, each rejected one with its reason."""
     accepted, rejected = [], []
     norm_transcript = _norm(transcript)
-    norm_caller = [_norm(text) for _, text in caller_segments(transcript)]
+    caller_texts = [text for _, text in caller_segments(transcript)]
+    norm_caller = [_norm(text) for text in caller_texts]
     for fact in facts:
         field = fact.get("field", "")
         quote = (fact.get("quote") or "").strip()
@@ -220,7 +245,9 @@ def validate(transcript, facts):
             elif not any(k in nq for k in keywords):
                 reason = f"quote does not mention {field.replace('_', ' ')}"
             if reason is None and keywords is not None:
-                neg = negated(quote, field)
+                # "he's breathing" cut from "I don't think he's breathing" keeps the caller's negation
+                context = next((_clause_before(t, nq) for t, nt in zip(caller_texts, norm_caller) if nq in nt), "")
+                neg = negated(quote, field) or negated(context, field)
                 if polarity == "present" and neg:
                     reason = "polarity conflict: quote is negated but fact says present"
                 elif polarity == "absent" and not neg:

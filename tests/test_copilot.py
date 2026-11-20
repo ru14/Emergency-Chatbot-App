@@ -149,3 +149,44 @@ def test_fact_quoting_dispatcher_is_rejected():
     acc, _ = core.validate("He's not breathing.", [{"field": "breathing", "value": "not breathing",
                                                      "polarity": "absent", "quote": "He's not breathing"}])
     assert acc
+
+
+# ---------------- screening and validation review (Prompt 3)
+
+def test_quote_cut_from_negated_sentence_is_rejected():
+    # The caller's sentence is negated; a fact quoting only its tail must not flip it to "present".
+    t = "Caller: I don't think he's breathing."
+    acc, rej = core.validate(t, [{"field": "breathing", "value": "breathing", "polarity": "present",
+                                  "quote": "he's breathing"}])
+    assert not acc and "polarity" in rej[0]["reason"]
+
+
+def test_no_then_symptom_still_alerts():
+    # "No," answers an earlier question; it must not cancel the symptom that follows "but".
+    alerts = {a["code"]: a for a in core.screen("Caller: No, but his chest hurts a lot.")}
+    assert "CHEST_PAIN" in alerts and not alerts["CHEST_PAIN"]["negated"]
+
+
+def test_uncertain_breathing_raises_alert():
+    # Conservative screening: uncertainty about breathing is flagged for the dispatcher to confirm.
+    for t in ["Caller: I don't think he's breathing.",
+              "Caller: I can't tell if he's breathing.",
+              "Caller: He's barely breathing."]:
+        found = codes(core.screen(t))
+        assert found & {"NOT_BREATHING", "BREATHING_UNCERTAIN"}, t
+
+
+def test_negation_cases_locked_in():
+    def alert(t, code):
+        return {a["code"]: a for a in core.screen(t)}.get(code)
+    assert alert("Caller: He has no chest pain.", "CHEST_PAIN")["negated"]
+    assert not alert("Caller: He's not breathing.", "NOT_BREATHING")["negated"]
+    assert alert("Caller: He isn't bleeding.", "SEVERE_BLEEDING")["negated"]
+    assert core.screen("Dispatcher: Is he breathing? Is there chest pain? Caller: Yes.") == []
+
+
+def test_unknown_polarity_stays_missing():
+    acc, _ = core.validate("Caller: I'm not sure if he's breathing.",
+                           [{"field": "breathing", "value": "unsure", "polarity": "unknown",
+                             "quote": "I'm not sure if he's breathing"}])
+    assert acc and "breathing" in {m["field"] for m in core.missing("medical", acc)}
