@@ -262,3 +262,25 @@ def test_analyze_is_rate_limited(monkeypatch):
     body = {"transcript": MED, "simulate_ai_failure": True}
     assert [client.post("/api/analyze", json=body).status_code for _ in range(3)] == [200, 200, 429]
     assert client.post("/api/screen", json={"transcript": MED}).status_code == 200  # screening is never limited
+
+
+# ---------------- external audit fixes
+
+def test_trapped_denial_is_not_a_positive_alert():
+    a = {x["code"]: x for x in core.screen("Caller: No one is trapped inside.")}
+    assert a["PERSON_TRAPPED"]["negated"] and core.cards(list(a.values())) == []
+    for t in ["Caller: She can't get out by herself.", "Caller: My grandmother is still inside.",
+              "Caller: I don't know if anyone is still inside."]:
+        assert "PERSON_TRAPPED" in codes(core.screen(t)), t
+
+
+def test_later_positive_mention_wins_and_is_flagged():
+    a = {x["code"]: x for x in core.screen("Caller: No chest pain. Now his chest hurts.")}
+    assert not a["CHEST_PAIN"]["negated"] and a["CHEST_PAIN"]["conflict"]
+    assert "conflicting" in a["CHEST_PAIN"]["label"]
+    assert any(c["code"] == "CHEST_PAIN" for c in core.cards(list(a.values())))
+
+
+def test_whitespace_transcript_rejected():
+    assert client.post("/api/analyze", json={"transcript": "   "}).status_code == 400
+    assert client.post("/api/screen", json={"transcript": "  \n "}).status_code == 400
