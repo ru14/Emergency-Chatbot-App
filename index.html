@@ -63,6 +63,7 @@
       <div class="row">
         <button class="primary" id="analyze">Analyze call</button>
         <label><input type="checkbox" id="fail"> Simulate AI outage</label>
+        <label title="Adds one fabricated fact to the model output, labelled as planted, to show that validation rejects it"><input type="checkbox" id="plant"> Plant a false fact</label>
         <span class="meta" id="incident-label"></span>
       </div>
       <p class="note">Editing the transcript and analyzing again adds a new revision to the same incident. Reviews made on an older revision are refused.</p>
@@ -145,9 +146,7 @@ function render(d) {
   current = d;
   $("incident-label").textContent = `Incident #${d.incident_id}, revision ${d.revision}` + (d.persisted ? " (saved to PostgreSQL)" : " (memory)");
 
-  const a = $("alerts"); a.replaceChildren(); a.className = "";
-  if (!d.alerts.length) { a.className = "empty"; a.textContent = "No keyword alerts."; }
-  for (const x of d.alerts) a.append(el("div", { class: "alert " + x.severity }, el("span", {}, x.negated ? "Negated: " + x.label : x.label), el("code", {}, x.match)));
+  renderAlerts(d.alerts, d.cards);
 
   const s = $("ai-status"); s.replaceChildren(); s.className = "";
   if (d.ai.status !== "ok") {
@@ -176,7 +175,7 @@ function render(d) {
   const rej = $("rejected"); rej.replaceChildren();
   if (d.rejected.length) {
     const t = el("table", {});
-    for (const f of d.rejected) t.append(el("tr", {}, el("td", {}, el("s", {}, f.field.replace(/_/g, " ") + ": " + f.value), " ", el("span", { class: "pill" }, f.polarity)),
+    for (const f of d.rejected) t.append(el("tr", {}, el("td", {}, el("s", {}, f.field.replace(/_/g, " ") + ": " + f.value), " ", el("span", { class: "pill" }, f.polarity), f.source ? el("div", { class: "pill", style: "margin-top:4px;display:inline-block" }, f.source) : null),
                                                  el("td", {}, el("q", {}, f.quote || "(no quote)"), el("div", { class: "reject-reason" }, "Rejected: " + f.reason))));
     rej.append(el("h2", { style: "margin-top:12px" }, "Rejected: not shown as facts"), t);
   }
@@ -186,9 +185,15 @@ function render(d) {
   if (!d.missing.length) m.textContent = "All required facts covered.";
   else m.append(el("ol", {}, ...d.missing.map(x => el("li", {}, x.ask, " ", el("span", { class: "pill" }, x.field.replace(/_/g, " "))))));
 
-  const c = $("cards"); c.replaceChildren(); c.className = d.cards.length ? "" : "empty";
-  if (!d.cards.length) c.textContent = "No card for these alerts.";
-  for (const k of d.cards) c.append(el("div", { class: "cardx" }, el("b", {}, k.title), el("ol", {}, ...k.steps.map(s => el("li", {}, s))), el("div", { class: "dis" }, k.disclaimer)));
+}
+
+function renderAlerts(alerts, cards) {
+  const a = $("alerts"); a.replaceChildren(); a.className = "";
+  if (!alerts.length) { a.className = "empty"; a.textContent = "No keyword alerts."; }
+  for (const x of alerts) a.append(el("div", { class: "alert " + x.severity }, el("span", {}, x.negated ? "Negated: " + x.label : x.label), el("code", {}, x.match)));
+  const c = $("cards"); c.replaceChildren(); c.className = cards.length ? "" : "empty";
+  if (!cards.length) c.textContent = "No card for these alerts.";
+  for (const k of cards) c.append(el("div", { class: "cardx" }, el("b", {}, k.title), el("ol", {}, ...k.steps.map(s => el("li", {}, s))), el("div", { class: "dis" }, k.disclaimer)));
 }
 
 $("analyze").onclick = async () => {
@@ -196,7 +201,13 @@ $("analyze").onclick = async () => {
   if (!transcript) return;
   $("analyze").disabled = true; $("analyze").textContent = "Analyzing…";
   try {
-    render(await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked }));
+    const t0 = performance.now();
+    const quick = await api("/api/screen", { transcript });
+    renderAlerts(quick.alerts, quick.cards);
+    $("ai-status").className = "meta";
+    $("ai-status").textContent = `Alerts shown in ${Math.round(performance.now() - t0)} ms without AI. Qwen 3 is extracting facts…`;
+    $("accepted").replaceChildren(); $("rejected").replaceChildren();
+    render(await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked, plant_false_fact: $("plant").checked }));
     loadRecent(); loadHealth();
   } catch (e) { $("ai-status").textContent = "Error: " + e.message; }
   finally { $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; }
