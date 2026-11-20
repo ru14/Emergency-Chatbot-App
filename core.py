@@ -88,25 +88,54 @@ ALERT_RULES = [
 ]
 
 
-def screen(transcript):
-    """Keyword alerts over the raw transcript. Runs before, and independent of, any model call.
+SPEAKER = re.compile(r"\b(Caller|Dispatcher|Call[- ]?taker|Operator)\s*:", re.IGNORECASE)
 
+
+def caller_segments(transcript):
+    """[(offset, text)] for what the caller said. Text after a Dispatcher/Operator/Call-taker label is left out.
+
+    A transcript with no speaker labels is treated as all caller speech.
+    """
+    labels = list(SPEAKER.finditer(transcript))
+    if not labels:
+        return [(0, transcript)]
+    segments = []
+    if transcript[:labels[0].start()].strip():
+        segments.append((0, transcript[:labels[0].start()]))  # unlabelled lead-in counts as caller
+    for i, m in enumerate(labels):
+        end = labels[i + 1].start() if i + 1 < len(labels) else len(transcript)
+        if m.group(1).lower() == "caller":
+            segments.append((m.end(), transcript[m.end():end]))
+    return segments
+
+
+def screen(transcript):
+    """Keyword alerts over what the caller said. Runs before, and independent of, any model call.
+
+    The dispatcher's own questions ("Is anyone trapped?") never raise an alert.
     It errs toward alerting: 'no blood' still shows the bleeding rule as negated rather than dropping it,
-    so a human sees it. Each alert carries the exact matched text and its position.
+    so a human sees it. Each alert carries the exact matched text and its position in the transcript.
     """
     alerts = []
     for code, label, severity, pattern in ALERT_RULES:
-        for m in re.finditer(pattern, transcript, flags=re.IGNORECASE):
-            # The sentence around the match decides whether this is a negated mention.
-            start = max(transcript.rfind(".", 0, m.start()), transcript.rfind("?", 0, m.start())) + 1
-            window = transcript[start:m.start()][-40:]
-            alert_is_itself_negative = code in {"NOT_BREATHING", "UNCONSCIOUS", "PERSON_TRAPPED"}
-            is_negated = (not alert_is_itself_negative) and negated(window)
-            alerts.append({
-                "code": code, "label": label, "severity": "info" if is_negated else severity,
-                "match": m.group(0), "start": m.start(), "negated": is_negated,
-            })
-            break  # one alert per rule is enough for the dispatcher
+        found = None
+        for offset, text in caller_segments(transcript):
+            m = re.search(pattern, text, flags=re.IGNORECASE)
+            if m:
+                found = (offset, text, m)
+                break
+        if not found:
+            continue  # one alert per rule is enough for the dispatcher
+        offset, text, m = found
+        # The sentence around the match decides whether this is a negated mention.
+        start = max(text.rfind(".", 0, m.start()), text.rfind("?", 0, m.start())) + 1
+        window = text[start:m.start()][-40:]
+        alert_is_itself_negative = code in {"NOT_BREATHING", "UNCONSCIOUS", "PERSON_TRAPPED"}
+        is_negated = (not alert_is_itself_negative) and negated(window)
+        alerts.append({
+            "code": code, "label": label, "severity": "info" if is_negated else severity,
+            "match": m.group(0), "start": offset + m.start(), "negated": is_negated,
+        })
     order = {"critical": 0, "high": 1, "info": 2}
     return sorted(alerts, key=lambda a: (order[a["severity"]], a["start"]))
 
@@ -166,6 +195,7 @@ def validate(transcript, facts):
     """Split model facts into accepted and rejected, each rejected one with its reason."""
     accepted, rejected = [], []
     norm_transcript = _norm(transcript)
+    norm_caller = [_norm(text) for _, text in caller_segments(transcript)]
     for fact in facts:
         field = fact.get("field", "")
         quote = (fact.get("quote") or "").strip()
@@ -179,6 +209,8 @@ def validate(transcript, facts):
             reason = "no supporting quote"
         elif nq not in norm_transcript:
             reason = "quote is not in the transcript"
+        elif not any(nq in seg for seg in norm_caller):
+            reason = "quote is the dispatcher's words, not the caller's"
         else:
             keywords = FIELDS[field][1]
             if keywords is None:

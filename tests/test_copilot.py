@@ -131,3 +131,21 @@ def test_screen_endpoint_and_planted_fact(monkeypatch):
     monkeypatch.setattr(appmod, "extract", lambda t: ({"incident_type": "medical", "facts": []}, {"model": "fake"}))
     r = client.post("/api/analyze", json={"transcript": MED, "plant_false_fact": True}).json()
     assert r["rejected"][0]["source"] == "planted test" and not r["accepted"]
+
+
+def test_dispatcher_words_do_not_raise_alerts():
+    t = "Dispatcher: Is anyone trapped inside? Is he bleeding? Caller: I don't know, I'm outside."
+    assert codes(core.screen(t), include_negated=True) == set()
+    # medical scenario: the dispatcher's "Is he awake?" is ignored, the caller's alerts remain
+    assert {"NOT_BREATHING", "UNCONSCIOUS", "CHEST_PAIN"} <= codes(core.screen(MED))
+
+
+def test_fact_quoting_dispatcher_is_rejected():
+    t = "Dispatcher: Is anyone trapped inside? Caller: I don't know, I'm outside."
+    acc, rej = core.validate(t, [{"field": "people_trapped", "value": "trapped inside", "polarity": "present",
+                                  "quote": "Is anyone trapped inside"}])
+    assert not acc and rej[0]["reason"] == "quote is the dispatcher's words, not the caller's"
+    # unlabelled transcripts still count as caller speech
+    acc, _ = core.validate("He's not breathing.", [{"field": "breathing", "value": "not breathing",
+                                                     "polarity": "absent", "quote": "He's not breathing"}])
+    assert acc
