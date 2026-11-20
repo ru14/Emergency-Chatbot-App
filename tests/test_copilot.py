@@ -17,6 +17,7 @@ MED = core.SCENARIOS["medical"]["transcript"]
 FIRE = core.SCENARIOS["fire"]["transcript"]
 appmod.load_dotenv = lambda **k: None
 appmod.DATABASE = False
+appmod.APP_PASSWORD = ""  # a local .env may turn the login on; these tests exercise the API itself
 client = TestClient(appmod.app)
 
 
