@@ -1,0 +1,17 @@
+# Your settings and your key. check.py makes .env. Never commit it, or a copy such as .env.txt.
+.env*
+!.env.example
+
+# Files Python writes when it runs, and a local virtual environment
+__pycache__/
+*.py[cod]
+.venv/
+
+# Cluster credentials
+*kubeconfig*.yaml
+
+# Instructor notes stay on the instructor's machine
+instructor/
+
+# Local editor/launcher settings
+.claude/

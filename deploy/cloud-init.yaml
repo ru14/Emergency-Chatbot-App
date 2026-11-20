@@ -1,0 +1,11 @@
+#cloud-config
+# Runs once, when the Linode boots for the first time.
+# In Cloud Manager, paste this whole file into Add User Data when you create the Linode.
+
+# SSH accepts your key only. Password login over SSH is off. root still logs in, with the key.
+ssh_pwauth: false
+disable_root: false
+
+# Install uv, the tool that runs app.py and installs its packages.
+runcmd:
+  - curl -LsSf https://astral.sh/uv/0.13.8/install.sh | env HOME=/root sh
