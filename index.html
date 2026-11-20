@@ -44,6 +44,10 @@
   details summary { cursor:pointer; color:var(--muted); font-size:12px; }
   pre { white-space:pre-wrap; font-size:11px; background:var(--infobg); padding:8px; border-radius:6px; max-height:240px; overflow:auto; }
   .note { font-size:12px; color:var(--muted); }
+  .demo-banner { position:sticky; top:0; z-index:10; background:#b42318; color:#fff; font-weight:700; text-align:center; padding:8px 12px; font-size:14px; letter-spacing:.02em; }
+  .loc-warn { width:100%; background:var(--critbg); color:var(--crit); font-weight:600; padding:6px 10px; border-radius:7px; }
+  .cardx .cid { font:11px ui-monospace,Menlo,monospace; color:var(--muted); }
+  #event-log { font:12px ui-monospace,Menlo,monospace; color:var(--crit); margin:6px 0 0; padding-left:18px; }
   .speakers { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:6px 8px; max-height:260px; overflow:auto; }
   .turn { display:flex; gap:8px; padding:3px 0; font-size:13px; }
   .turn .who { flex:0 0 78px; font-size:11px; font-weight:600; text-transform:uppercase; padding-top:2px; }
@@ -55,6 +59,7 @@
 </style>
 </head>
 <body>
+<div class="demo-banner" role="alert">DEMO ONLY &mdash; Not for emergency use. In a real emergency, call 911. All calls shown are synthetic.</div>
 <header>
   <h1>Emergency Dispatch Copilot</h1>
   <span class="badge" id="b-host">host …</span>
@@ -81,6 +86,7 @@
     <section class="card">
       <h2>Recent incidents <small id="store-label"></small></h2>
       <div id="recent" class="empty">None yet.</div>
+      <ul id="event-log" aria-live="polite"></ul>
     </section>
   </div>
   <div>
@@ -110,7 +116,21 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-let lastAi = null;      // result of the last model call, shown in the header badge
+let lastAi = null;
+let requestSeq = 0;    // bumps on every analyze, scenario switch, new incident or reopen; late answers are discarded
+function clearPanels() {  // nothing from the previous incident stays on screen
+  $("incident-card").hidden = true; $("incident-head").replaceChildren(); $("incident-label").textContent = "";
+  $("alerts").className = "empty"; $("alerts").textContent = "Analyze a call to see alerts.";
+  $("ai-status").className = "empty"; $("ai-status").textContent = "Not run yet.";
+  $("accepted").replaceChildren(); $("rejected").replaceChildren(); $("raw-box").hidden = true;
+  $("missing").className = "empty"; $("missing").textContent = "\u2014";
+  $("cards").className = "empty"; $("cards").textContent = "\u2014";
+  renderSpeakers("");
+}
+function logEvent(msg) {
+  const li = el("li", {}, `${new Date().toLocaleTimeString()} ${msg}`);
+  $("event-log").prepend(li); console.warn(msg);
+}      // result of the last model call, shown in the header badge
 let dbConnected = false;   // last analysis: {incident_id, revision, ...}
 let scenarioKey = null;
 
@@ -143,7 +163,7 @@ async function loadHealth() {
 async function loadScenarios() {
   const s = await api("/api/scenarios");
   for (const [key, sc] of Object.entries(s)) {
-    $("scenarios").append(el("button", { onclick: () => { $("transcript").value = sc.transcript; scenarioKey = key; current = null; $("incident-label").textContent = ""; } }, sc.title));
+    $("scenarios").append(el("button", { onclick: () => { requestSeq++; $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; clearPanels(); $("transcript").value = sc.transcript; scenarioKey = key; current = null; } }, sc.title));
   }
 }
 
@@ -192,7 +212,9 @@ function render(d, reviews = []) {
     el("span", {}, `revision ${d.revision}`),
     el("span", { class: "pill " + (d.persisted ? "present" : "") }, d.persisted ? "saved to PostgreSQL" : "memory only"),
     el("span", { class: "pill " + (d.ai.status === "ok" ? "present" : "absent") }, d.ai.status === "ok" ? "AI ok" : d.ai.status === "invalid_output" ? "AI reply rejected" : "AI unavailable"),
-    el("span", { class: "meta" }, `${d.alerts.filter(a => !a.negated).length} alerts · ${d.missing.length} missing facts`));
+    el("span", { class: "meta" }, `${d.alerts.filter(a => !a.negated).length} alerts · ${d.missing.length} missing facts`),
+    d.accepted.some(f => f.field === "location") ? null
+      : el("div", { class: "loc-warn", role: "status" }, "\u26A0 LOCATION NOT CONFIRMED \u2014 ask for the exact address or nearest cross street."));
   lastAi = d.ai; showAiBadge(d.ai);
   if (d.transcript) renderSpeakers(d.transcript);
   const decided = {};
@@ -254,33 +276,43 @@ function renderAlerts(alerts, cards) {
   if (!alerts.length) { a.className = "empty"; a.textContent = "No keyword alerts."; }
   for (const x of alerts) a.append(el("div", { class: "alert " + x.severity }, el("span", {}, x.negated ? "Negated: " + x.label : x.label), el("code", {}, x.match)));
   const c = $("cards"); c.replaceChildren(); c.className = cards.length ? "" : "empty";
-  if (!cards.length) c.textContent = "No card for these alerts.";
-  for (const k of cards) c.append(el("div", { class: "cardx" }, el("b", {}, k.title), el("ol", {}, ...k.steps.map(s => el("li", {}, s))), el("div", { class: "dis" }, k.disclaimer)));
+  if (!cards.length) c.textContent = "No rule matched. This is not an assessment of safety.";
+  for (const k of cards) c.append(el("div", { class: "cardx" }, el("b", {}, k.title), " ", el("span", { class: "cid" }, `${k.id} · v${k.version}`),
+    el("ol", {}, ...k.steps.map(s => el("li", {}, s))), el("div", { class: "dis" }, k.disclaimer)));
 }
 
 $("analyze").onclick = async () => {
   const transcript = $("transcript").value.trim();
   if (!transcript) return;
+  const mySeq = ++requestSeq, myIncident = current?.incident_id ?? null, myScenario = scenarioKey;
   $("analyze").disabled = true; $("analyze").textContent = "Analyzing…";
   try {
     const t0 = performance.now();
     const quick = await api("/api/screen", { transcript });
+    if (mySeq !== requestSeq) return logEvent("STALE_RESPONSE_DISCARDED: screening for an earlier request");
     renderAlerts(quick.alerts, quick.cards); renderSpeakers(transcript);
     $("ai-status").className = "meta";
     $("ai-status").textContent = `Alerts shown in ${Math.round(performance.now() - t0)} ms without AI. Qwen 3 is extracting facts…`;
     $("accepted").replaceChildren(); $("rejected").replaceChildren();
-    const d = await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked, plant_false_fact: $("plant").checked });
+    const d = await api("/api/analyze", { transcript, scenario: myScenario, incident_id: myIncident, simulate_ai_failure: $("fail").checked, plant_false_fact: $("plant").checked });
+    if (mySeq !== requestSeq || (myIncident !== null && current?.incident_id !== myIncident)) {
+      loadRecent();
+      return logEvent(`STALE_RESPONSE_DISCARDED: incident #${d.incident_id} revision ${d.revision} arrived after the screen moved on (saved, not shown)`);
+    }
     const saved = d.revision > 1 ? (await api(`/api/incidents/${d.incident_id}`).catch(() => ({ reviews: [] }))).reviews : [];
     render({ ...d, transcript }, saved);
     loadRecent(); loadHealth();
   } catch (e) { $("ai-status").textContent = "Error: " + e.message; }
-  finally { $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; }
+  finally { if (mySeq === requestSeq) { $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; } }
 };
-$("new-incident").onclick = () => { current = null; scenarioKey = null; $("transcript").value = ""; $("incident-label").textContent = ""; $("incident-card").hidden = true; renderSpeakers(""); };
+$("new-incident").onclick = () => { requestSeq++; $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; current = null; scenarioKey = null; $("transcript").value = ""; clearPanels(); };
 
 async function openIncident(id) {
+  const mySeq = ++requestSeq;
+  $("analyze").disabled = false; $("analyze").textContent = "Analyze call";
   try {
     const inc = await api(`/api/incidents/${id}`);
+    if (mySeq !== requestSeq) return logEvent(`STALE_RESPONSE_DISCARDED: incident #${id} opened after the screen moved on`);
     scenarioKey = inc.scenario; $("transcript").value = inc.transcript;
     render({ ...inc.analysis, incident_id: inc.id, revision: inc.revision, persisted: dbConnected, transcript: inc.transcript }, inc.reviews || []);
   } catch (e) { $("ai-status").textContent = "Could not open incident: " + e.message; }

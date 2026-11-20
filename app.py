@@ -41,6 +41,21 @@ DATABASE = bool(os.environ.get("PGHOST"))
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")  # set it to require a login (user: dispatcher)
 AI_TIMEOUT = float(os.environ.get("AI_TIMEOUT", "30"))
 MAX_TRANSCRIPT = 8000
+RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "20"))  # /api/analyze calls per client IP per minute
+_recent_calls = {}
+_rate_lock = threading.Lock()
+
+
+def rate_limited(ip):
+    """Simple sliding one-minute window per IP, to protect the shared event inference key."""
+    now = time.monotonic()
+    with _rate_lock:
+        calls = [t for t in _recent_calls.get(ip, []) if now - t < 60]
+        limited = len(calls) >= RATE_LIMIT
+        if not limited:
+            calls.append(now)
+        _recent_calls[ip] = calls
+    return limited
 
 _client = None
 
@@ -306,7 +321,9 @@ def screen_only(body: ScreenBody):
 
 
 @app.post("/api/analyze")
-def analyze(body: AnalyzeBody):
+def analyze(body: AnalyzeBody, request: Request):
+    if rate_limited(request.client.host if request.client else "unknown"):
+        raise HTTPException(429, f"Rate limit: at most {RATE_LIMIT} analyses per minute. Wait a minute and try again.")
     transcript = body.transcript.strip()
     alerts = core.screen(transcript)  # first, and with no model involved
     ai = {"status": "ok"}

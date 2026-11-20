@@ -18,7 +18,8 @@ MED = core.SCENARIOS["medical"]["transcript"]
 FIRE = core.SCENARIOS["fire"]["transcript"]
 appmod.load_dotenv = lambda **k: None
 appmod.DATABASE = False
-appmod.APP_PASSWORD = ""  # a local .env may turn the login on; these tests exercise the API itself
+appmod.APP_PASSWORD = ""
+appmod.RATE_LIMIT = 10_000  # the rate-limit test lowers this itself  # a local .env may turn the login on; these tests exercise the API itself
 client = TestClient(appmod.app)
 
 
@@ -243,3 +244,21 @@ def test_unknown_incident_type_is_corrected(monkeypatch):
     _fake_reply(monkeypatch, json.dumps({"incident_type": "medical", "facts": "none"}))
     r = client.post("/api/analyze", json={"transcript": MED}).json()
     assert r["ai"]["status"] == "invalid_output" and r["ai"]["error"] == "'facts' is not a list"
+
+
+# ---------------- demo gaps (cards, rate limit)
+
+def test_cards_carry_id_version_and_not_approved_label():
+    cs = core.cards(core.screen(MED))
+    assert cs and all(c["id"] == "PC-" + c["code"] and c["version"] == core.CARD_VERSION for c in cs)
+    assert all("not clinically approved" in c["disclaimer"] for c in cs)
+    assert core.cards(core.screen("Caller: I'd like to report a noise complaint.")) == []
+    assert core.NO_RULE_MATCHED == "No rule matched. This is not an assessment of safety."
+
+
+def test_analyze_is_rate_limited(monkeypatch):
+    monkeypatch.setattr(appmod, "RATE_LIMIT", 2)
+    monkeypatch.setattr(appmod, "_recent_calls", {})
+    body = {"transcript": MED, "simulate_ai_failure": True}
+    assert [client.post("/api/analyze", json=body).status_code for _ in range(3)] == [200, 200, 429]
+    assert client.post("/api/screen", json={"transcript": MED}).status_code == 200  # screening is never limited

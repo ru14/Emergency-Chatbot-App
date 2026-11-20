@@ -317,7 +317,9 @@ def missing(incident_type, accepted):
 
 # ---------------------------------------------------------------- deterministic protocol cards
 
-DISCLAIMER = "Demo card for a synthetic scenario. Not clinical guidance. Follow your agency's approved protocol."
+DISCLAIMER = "Demo-only; not clinically approved. Follow your agency's approved protocol."
+CARD_VERSION = "demo-0.1"
+NO_RULE_MATCHED = "No rule matched. This is not an assessment of safety."
 CARDS = {
     "NOT_BREATHING": ("Possible cardiac / respiratory arrest",
                       ["Dispatch highest-priority medical response now.",
@@ -353,5 +355,6 @@ def cards(alerts):
         if a["negated"] or a["code"] not in CARDS:
             continue
         title, steps = CARDS[a["code"]]
-        out.append({"code": a["code"], "title": title, "steps": steps, "disclaimer": DISCLAIMER})
+        out.append({"id": f"PC-{a['code']}", "version": CARD_VERSION, "code": a["code"], "title": title,
+                    "steps": steps, "disclaimer": DISCLAIMER})
     return out
