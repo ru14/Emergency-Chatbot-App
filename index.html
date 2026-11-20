@@ -116,6 +116,7 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
+let current = null;     // the incident on screen
 let lastAi = null;
 let requestSeq = 0;    // bumps on every analyze, scenario switch, new incident or reopen; late answers are discarded
 function clearPanels() {  // nothing from the previous incident stays on screen
@@ -194,7 +195,9 @@ function renderSpeakers(text) {
     if (text.slice(0, labels[0].index).trim()) turns.push(["caller", text.slice(0, labels[0].index)]);
     labels.forEach((m, i) => turns.push([m[1].toLowerCase(), text.slice(m.index + m[0].length, i + 1 < labels.length ? labels[i + 1].index : text.length)]));
   }
-  box.append(el("div", { class: "note" }, "Only caller speech is screened and accepted as evidence."));
+  box.append(el("div", { class: labels.length ? "note" : "loc-warn" }, labels.length
+    ? "Only caller speech is screened and accepted as evidence."
+    : "No speaker labels \u2014 treated as caller speech, unverified. Add 'Caller:' / 'Dispatcher:' labels."));
   for (const [who, said] of turns) {
     const isCaller = who === "caller";
     box.append(el("div", { class: "turn " + (isCaller ? "caller" : "other") }, el("span", { class: "who" }, who),

@@ -315,6 +315,8 @@ def scenarios():
 
 @app.post("/api/screen")
 def screen_only(body: ScreenBody):
+    if not body.transcript.strip():
+        raise HTTPException(400, "Transcript is empty.")
     """Instant, model-free alerts and cards. The page shows these while Qwen is still working."""
     alerts = core.screen(body.transcript)
     return {"alerts": alerts, "cards": core.cards(alerts)}
@@ -322,6 +324,8 @@ def screen_only(body: ScreenBody):
 
 @app.post("/api/analyze")
 def analyze(body: AnalyzeBody, request: Request):
+    if not body.transcript.strip():
+        raise HTTPException(400, "Transcript is empty.")
     if rate_limited(request.client.host if request.client else "unknown"):
         raise HTTPException(429, f"Rate limit: at most {RATE_LIMIT} analyses per minute. Wait a minute and try again.")
     transcript = body.transcript.strip()
