@@ -49,18 +49,32 @@ content: {"breathing": "absent", "quote": "My neighbor is not breathing at 5th a
 
 ## Managed PostgreSQL
 
-| Item | Value | Status |
+| Item | Value | Evidence |
 |---|---|---|
-| Procedure | Starter Lab 03: Seattle, Nanode 1 GB, 1 node, Specific Access allow list, connection details into `PGHOST`/`PGPORT`/`PGPASSWORD` | Verified from starter docs |
-| Cluster | Not created or not yet configured in `.env` | **Pending: in progress** |
-| Without it | The app runs with an in-memory store, and `/health` says "memory only, lost on restart". It does not claim persistence | Verified |
+| Procedure | Starter Lab 03: Seattle, Nanode 1 GB, 1 node, Specific Access allow list, connection details into `PGHOST`/`PGPORT`/`PGPASSWORD` | Starter `03-database/README.md`; followed here |
+| Cluster | `sea-copilot-db`, PostgreSQL 19, us-sea, Nanode 1 GB, 1 node, public connection, SSL required | Cloud Manager; `show server_version` -> 19.0, `ssl_in_use` -> True |
+| Allow list | Linode `172.232.188.234/32` and `2600:3c0a::2000:74ff:fed4:7c43/128`, laptop `4.53.158.54/32` | Cloud Manager |
+| Tables | `incidents` (transcript, revision, analysis JSON) and `reviews` (dispatcher decisions), created by the app on first use | `information_schema.tables` |
+| Health | `/health` on the Linode -> `"database":"connected (1 incidents stored)"` | Live curl |
+| Feature that depends on it | Incident history and audit trail survive a restart; the revision guard (`SELECT ... FOR UPDATE`) refuses outdated reviews | Live run below |
+
+**Live persistence run on the Linode (synthetic fire call):**
+
+```
+1. analyze -> 200, incident 1 rev 1, persisted=True, qwen3-8-27b 15688 ms, 7 facts accepted
+2. confirm people_trapped on rev 1 -> 200
+3. systemctl restart copilot
+4. after restart: incident 1 still present, reviews=[('people_trapped', 'confirm', 1)]
+5. new transcript revision -> rev 2
+6. review on rev 1 -> 409 "Stale review: incident is at revision 2, you reviewed revision 1."
+```
 
 ## Credentials you configure yourself (never paste them into chat)
 
 - [x] `AKAMAI_API_KEY` in `.env` (from event staff; saved by `uv run check.py`)
 - [x] SSH public key on the Linode (`~/.ssh/authorized_keys`)
 - [x] `APP_PASSWORD` in `.env` (generated; app login user `dispatcher`)
-- [ ] `PGHOST`, `PGPORT`, `PGPASSWORD` in `.env` (from the database's Connection Details)
+- [x] `PGHOST`, `PGPORT`, `PGPASSWORD` in `.env` (from the database's Connection Details)
 - [ ] Submission link (from event staff)
 
 ## If inference becomes unavailable
