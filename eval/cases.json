@@ -1,0 +1,43 @@
+{
+  "_note": "Synthetic, hand-labelled demo cases. Not real calls and not a clinical benchmark. 'expected' lists the life-threat categories a dispatcher should be alerted to. Categories: BREATHING, UNCONSCIOUS, CHEST_PAIN, BLEEDING, TRAPPED, FIRE, SMOKE.",
+  "screening": [
+    {"id": "S01", "t": "Caller: My neighbor collapsed. He's not breathing.", "expected": ["BREATHING"]},
+    {"id": "S02", "t": "Caller: I don't think he's breathing.", "expected": ["BREATHING"]},
+    {"id": "S03", "t": "Caller: He's barely breathing.", "expected": ["BREATHING"]},
+    {"id": "S04", "t": "Caller: He has no chest pain, he just feels dizzy.", "expected": []},
+    {"id": "S05", "t": "Caller: No, but his chest hurts a lot.", "expected": ["CHEST_PAIN"]},
+    {"id": "S06", "t": "Caller: No chest pain. Now his chest hurts.", "expected": ["CHEST_PAIN"]},
+    {"id": "S07", "t": "Dispatcher: Is he breathing? Is anyone trapped? Is he bleeding? Caller: He fell but he's talking to me.", "expected": []},
+    {"id": "S08", "t": "Dispatcher: Is there any smoke or fire? Caller: No, I just smell gas.", "expected": []},
+    {"id": "S09", "t": "Caller: He's unconscious, he won't wake up.", "expected": ["UNCONSCIOUS"]},
+    {"id": "S10", "t": "Caller: There's no blood that I can see.", "expected": []},
+    {"id": "S11", "t": "Caller: He cut his arm and he's bleeding a lot.", "expected": ["BLEEDING"]},
+    {"id": "S12", "t": "Caller: There's a fire in my kitchen and smoke everywhere.", "expected": ["FIRE", "SMOKE"]},
+    {"id": "S13", "t": "Caller: My grandmother is still inside, she can't get out.", "expected": ["TRAPPED"]},
+    {"id": "S14", "t": "Caller: No one is trapped inside, we all got out.", "expected": []},
+    {"id": "S15", "t": "Caller: I don't know if anyone is still inside.", "expected": ["TRAPPED"]},
+    {"id": "S16", "t": "Dispatcher: Is anyone still inside? Caller: Everyone is out, we're across the street.", "expected": []},
+    {"id": "S17", "t": "Caller: There's smoke coming from the garage and my dad is not breathing well, he isn't breathing.", "expected": ["SMOKE", "BREATHING"]},
+    {"id": "S18", "t": "Caller: My neighbor collapsed at the bus stop on 5th and Pine. He's not breathing, I don't think he's breathing. Dispatcher: Is he awake? Caller: No, he's unconscious, he won't wake up. Caller: There's no blood that I can see. He said his chest hurt right before he fell.", "expected": ["BREATHING", "UNCONSCIOUS", "CHEST_PAIN"]},
+    {"id": "S19", "t": "Caller: There's a fire in my kitchen, apartment 3B at 1200 Lake Street. There's a lot of smoke in the hallway. Caller: I'm outside now but my grandmother is still inside, she can't get out by herself. Caller: I don't see any flames in the bedroom yet.", "expected": ["FIRE", "SMOKE", "TRAPPED"]},
+    {"id": "S20", "t": "Caller: I'd like to report a noise complaint next door.", "expected": []}
+  ],
+  "facts": [
+    {"id": "F01", "t": "Caller: He's not breathing.", "fact": {"field": "breathing", "value": "not breathing", "polarity": "absent", "quote": "He's not breathing"}, "supported": true},
+    {"id": "F02", "t": "Caller: He's not breathing.", "fact": {"field": "breathing", "value": "breathing", "polarity": "present", "quote": "He's not breathing"}, "supported": false},
+    {"id": "F03", "t": "Caller: I don't think he's breathing.", "fact": {"field": "breathing", "value": "breathing", "polarity": "present", "quote": "he's breathing"}, "supported": false},
+    {"id": "F04", "t": "Caller: He fell down the stairs.", "fact": {"field": "bleeding", "value": "heavy bleeding", "polarity": "present", "quote": "he is bleeding heavily from his head"}, "supported": false},
+    {"id": "F05", "t": "Dispatcher: Is anyone trapped inside? Caller: I don't know.", "fact": {"field": "people_trapped", "value": "trapped", "polarity": "present", "quote": "Is anyone trapped inside"}, "supported": false},
+    {"id": "F06", "t": "Caller: There's no blood that I can see.", "fact": {"field": "bleeding", "value": "no blood", "polarity": "absent", "quote": "There's no blood that I can see"}, "supported": true},
+    {"id": "F07", "t": "Caller: There's no blood that I can see.", "fact": {"field": "bleeding", "value": "bleeding", "polarity": "present", "quote": "There's no blood that I can see"}, "supported": false},
+    {"id": "F08", "t": "Caller: He's unconscious, he won't wake up.", "fact": {"field": "conscious", "value": "unconscious", "polarity": "absent", "quote": "he's unconscious"}, "supported": true},
+    {"id": "F09", "t": "Caller: He's unconscious, he won't wake up.", "fact": {"field": "chest_pain", "value": "chest pain", "polarity": "present", "quote": "he won't wake up"}, "supported": false},
+    {"id": "F10", "t": "Caller: The fire is at 1200 Lake Street.", "fact": {"field": "location", "value": "1200 Lake Street", "polarity": "present", "quote": "1200 Lake Street"}, "supported": true},
+    {"id": "F11", "t": "Caller: The fire is at 1200 Lake Street.", "fact": {"field": "location", "value": "7th and Union", "polarity": "present", "quote": "1200 Lake Street"}, "supported": false},
+    {"id": "F12", "t": "Caller: My grandmother is still inside, she can't get out.", "fact": {"field": "people_trapped", "value": "can't get out", "polarity": "present", "quote": "she can't get out"}, "supported": true},
+    {"id": "F13", "t": "Caller: There's a lot of smoke in the hallway.", "fact": {"field": "smoke", "value": "smoke in hallway", "polarity": "present", "quote": "There's a lot of smoke in the hallway"}, "supported": true},
+    {"id": "F14", "t": "Caller: There's a lot of smoke in the hallway.", "fact": {"field": "hazards", "value": "propane tank", "polarity": "present", "quote": "propane tank in the garage"}, "supported": false},
+    {"id": "F15", "t": "Caller: He said his chest hurt right before he fell.", "fact": {"field": "chest_pain", "value": "chest hurt", "polarity": "present", "quote": "his chest hurt"}, "supported": true},
+    {"id": "F16", "t": "Caller: He has no chest pain.", "fact": {"field": "chest_pain", "value": "chest pain", "polarity": "present", "quote": "He has no chest pain"}, "supported": false}
+  ]
+}
