@@ -44,6 +44,14 @@
   details summary { cursor:pointer; color:var(--muted); font-size:12px; }
   pre { white-space:pre-wrap; font-size:11px; background:var(--infobg); padding:8px; border-radius:6px; max-height:240px; overflow:auto; }
   .note { font-size:12px; color:var(--muted); }
+  .speakers { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:6px 8px; max-height:260px; overflow:auto; }
+  .turn { display:flex; gap:8px; padding:3px 0; font-size:13px; }
+  .turn .who { flex:0 0 78px; font-size:11px; font-weight:600; text-transform:uppercase; padding-top:2px; }
+  .turn.caller .who { color:var(--accent); }
+  .turn.other { color:var(--muted); } .turn.other .tag { font-size:11px; font-style:italic; }
+  .incident-head { display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; }
+  .incident-head b { font-size:16px; }
+  tr.clickable { cursor:pointer; } tr.clickable:hover td { background:var(--infobg); }
 </style>
 </head>
 <body>
@@ -66,6 +74,7 @@
         <label title="Adds one fabricated fact to the model output, labelled as planted, to show that validation rejects it"><input type="checkbox" id="plant"> Plant a false fact</label>
         <span class="meta" id="incident-label"></span>
       </div>
+      <div id="speakers" class="speakers" hidden></div>
       <p class="note">Editing the transcript and analyzing again adds a new revision to the same incident. Reviews made on an older revision are refused.</p>
       <div class="row"><button id="new-incident">New incident</button></div>
     </section>
@@ -75,6 +84,9 @@
     </section>
   </div>
   <div>
+    <section class="card" id="incident-card" hidden>
+      <div class="incident-head" id="incident-head"></div>
+    </section>
     <section class="card">
       <h2>Risk alerts <small>raw keyword screen, runs without AI</small></h2>
       <div id="alerts" class="empty">Analyze a call to see alerts.</div>
@@ -98,7 +110,8 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-let current = null;   // last analysis: {incident_id, revision, ...}
+let lastAi = null;      // result of the last model call, shown in the header badge
+let dbConnected = false;   // last analysis: {incident_id, revision, ...}
 let scenarioKey = null;
 
 function el(tag, attrs = {}, ...kids) {
@@ -121,8 +134,9 @@ async function api(path, body) {
 async function loadHealth() {
   const h = await api("/health");
   setBadge("b-host", "host: " + h.host, true);
-  setBadge("b-inf", "inference: " + h.inference, !h.inference.startsWith("not"));
+  if (lastAi) showAiBadge(lastAi); else setBadge("b-inf", "inference: " + h.inference, !h.inference.startsWith("not"));
   setBadge("b-db", "database: " + h.database, h.database.startsWith("connected"));
+  dbConnected = h.database.startsWith("connected");
   $("store-label").textContent = h.database.startsWith("connected") ? "(PostgreSQL, survives restarts)" : "(memory only)";
 }
 
@@ -138,13 +152,50 @@ async function loadRecent() {
   const box = $("recent"); box.replaceChildren(); box.className = rows.length ? "" : "empty";
   if (!rows.length) { box.textContent = "None yet."; return; }
   const t = el("table", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Scenario"), el("th", {}, "Rev"), el("th", {}, "AI"), el("th", {}, "Updated")));
-  for (const r of rows) t.append(el("tr", {}, el("td", {}, r.id), el("td", {}, r.scenario || "custom"), el("td", {}, r.revision), el("td", {}, r.ai_status), el("td", {}, r.updated_at.slice(11, 19))));
-  box.append(t);
+  for (const r of rows) t.append(el("tr", { class: "clickable", title: "Open this incident", onclick: () => openIncident(r.id) },
+    el("td", {}, r.id), el("td", {}, r.scenario || "custom"), el("td", {}, r.revision), el("td", {}, r.ai_status),
+    el("td", {}, /[zZ]|[+-]\d\d:\d\d$/.test(r.updated_at) ? new Date(r.updated_at).toLocaleTimeString() : r.updated_at.slice(11, 19))));
+  box.append(t, el("p", { class: "note" }, "Click a row to reopen it with its saved review decisions."));
 }
 
-function render(d) {
+function showAiBadge(ai) {
+  setBadge("b-inf", ai.status === "ok" ? `inference: ok (${(ai.latency_ms / 1000).toFixed(1)} s, ${ai.model})` : "inference: unavailable", ai.status === "ok");
+}
+
+const SPEAKER = /\b(Caller|Dispatcher|Call[- ]?taker|Operator)\s*:/gi;  // same labels the server screens by
+function renderSpeakers(text) {
+  const box = $("speakers"); box.replaceChildren(); box.hidden = !text;
+  if (!text) return;
+  const labels = [...text.matchAll(SPEAKER)];
+  const turns = [];
+  if (!labels.length) turns.push(["caller", text]);
+  else {
+    if (text.slice(0, labels[0].index).trim()) turns.push(["caller", text.slice(0, labels[0].index)]);
+    labels.forEach((m, i) => turns.push([m[1].toLowerCase(), text.slice(m.index + m[0].length, i + 1 < labels.length ? labels[i + 1].index : text.length)]));
+  }
+  box.append(el("div", { class: "note" }, "Only caller speech is screened and accepted as evidence."));
+  for (const [who, said] of turns) {
+    const isCaller = who === "caller";
+    box.append(el("div", { class: "turn " + (isCaller ? "caller" : "other") }, el("span", { class: "who" }, who),
+      el("span", {}, said.trim(), isCaller ? null : el("span", { class: "tag" }, "  (not screened)"))));
+  }
+}
+
+function render(d, reviews = []) {
   current = d;
-  $("incident-label").textContent = `Incident #${d.incident_id}, revision ${d.revision}` + (d.persisted ? " (saved to PostgreSQL)" : " (memory)");
+  $("incident-label").textContent = `Incident #${d.incident_id}, revision ${d.revision}`;
+  $("incident-card").hidden = false;
+  $("incident-head").replaceChildren(
+    el("b", {}, `Incident #${d.incident_id}`),
+    el("span", { class: "pill" }, d.incident_type || "unknown"),
+    el("span", {}, `revision ${d.revision}`),
+    el("span", { class: "pill " + (d.persisted ? "present" : "") }, d.persisted ? "saved to PostgreSQL" : "memory only"),
+    el("span", { class: "pill " + (d.ai.status === "ok" ? "present" : "absent") }, d.ai.status === "ok" ? "AI ok" : "AI unavailable"),
+    el("span", { class: "meta" }, `${d.alerts.filter(a => !a.negated).length} alerts · ${d.missing.length} missing facts`));
+  lastAi = d.ai; showAiBadge(d.ai);
+  if (d.transcript) renderSpeakers(d.transcript);
+  const decided = {};
+  for (const r of reviews) decided[r.field] = r;  // latest decision per field wins
 
   renderAlerts(d.alerts, d.cards);
 
@@ -166,12 +217,18 @@ function render(d) {
               cell.replaceChildren(el("span", { class: "decided " + decision }, decision === "confirm" ? "Confirmed" : "Rejected")); }
         catch (e) { cell.replaceChildren(el("span", { class: "reject-reason" }, e.message)); }
       };
+      const prior = decided[f.field];
+      if (prior) cell.append(el("div", { class: "decided " + prior.decision },
+        `${prior.decision === "confirm" ? "Confirmed" : "Rejected"} on revision ${prior.revision}` + (prior.revision !== d.revision ? " (older revision)" : "")));
       cell.append(el("button", { onclick: mark("confirm") }, "Confirm"), " ", el("button", { onclick: mark("reject") }, "Reject"));
       t.append(el("tr", {}, el("td", {}, el("b", {}, f.field.replace(/_/g, " ")), el("br"), f.value, " ", el("span", { class: "pill " + f.polarity }, f.polarity)),
                           el("td", {}, el("q", {}, f.quote)), cell));
     }
     acc.append(el("h2", { style: "margin-top:12px" }, "Accepted (quote found, polarity agrees)"), t);
   }
+  if (reviews.length) acc.append(el("h2", { style: "margin-top:12px" }, "Saved review decisions"),
+    el("ul", {}, ...reviews.map(r => el("li", {}, el("span", { class: "decided " + r.decision }, r.decision === "confirm" ? "Confirmed" : "Rejected"),
+      ` ${r.field.replace(/_/g, " ")} on revision ${r.revision}` + (r.revision !== d.revision ? " (older revision)" : "")))));
   const rej = $("rejected"); rej.replaceChildren();
   if (d.rejected.length) {
     const t = el("table", {});
@@ -203,16 +260,26 @@ $("analyze").onclick = async () => {
   try {
     const t0 = performance.now();
     const quick = await api("/api/screen", { transcript });
-    renderAlerts(quick.alerts, quick.cards);
+    renderAlerts(quick.alerts, quick.cards); renderSpeakers(transcript);
     $("ai-status").className = "meta";
     $("ai-status").textContent = `Alerts shown in ${Math.round(performance.now() - t0)} ms without AI. Qwen 3 is extracting facts…`;
     $("accepted").replaceChildren(); $("rejected").replaceChildren();
-    render(await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked, plant_false_fact: $("plant").checked }));
+    const d = await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked, plant_false_fact: $("plant").checked });
+    const saved = d.revision > 1 ? (await api(`/api/incidents/${d.incident_id}`).catch(() => ({ reviews: [] }))).reviews : [];
+    render({ ...d, transcript }, saved);
     loadRecent(); loadHealth();
   } catch (e) { $("ai-status").textContent = "Error: " + e.message; }
   finally { $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; }
 };
-$("new-incident").onclick = () => { current = null; scenarioKey = null; $("transcript").value = ""; $("incident-label").textContent = ""; };
+$("new-incident").onclick = () => { current = null; scenarioKey = null; $("transcript").value = ""; $("incident-label").textContent = ""; $("incident-card").hidden = true; renderSpeakers(""); };
+
+async function openIncident(id) {
+  try {
+    const inc = await api(`/api/incidents/${id}`);
+    scenarioKey = inc.scenario; $("transcript").value = inc.transcript;
+    render({ ...inc.analysis, incident_id: inc.id, revision: inc.revision, persisted: dbConnected, transcript: inc.transcript }, inc.reviews || []);
+  } catch (e) { $("ai-status").textContent = "Could not open incident: " + e.message; }
+}
 
 loadHealth().catch(() => {}); loadScenarios(); loadRecent().catch(() => {});
 </script>
