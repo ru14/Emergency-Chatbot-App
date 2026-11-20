@@ -45,6 +45,33 @@ Known limits: English keyword rules only; no speech-to-text; no CAD integration;
   agency-approved protocol content. Unlabelled transcripts are treated as caller speech and marked unverified.
 ```
 
+## Benchmark
+
+Offline, about one second, no model, network or database: `python3 eval/benchmark.py`
+(20 synthetic calls and 16 model facts, hand-labelled, in [eval/cases.json](eval/cases.json)).
+
+```
+Risk screening - 20 synthetic calls, 19 expected alerts
+                                  Baseline        Ours
+  Precision                            71%        100%
+  Recall (life-threats caught)         89%        100%
+  False alarms                           7           0
+  Missed alerts                          2           0
+
+AI fact validation - 16 model facts (9 unsupported, 7 supported)
+                                  Baseline        Ours
+  Unsupported facts accepted             9           0
+  Supported facts rejected               0           0
+```
+
+- **Baseline:** the same keyword patterns matched anywhere in the transcript (both speakers) with no negation
+  handling, and every model fact trusted.
+- **Techniques:** caller-only screening; clause-level negation ("no chest pain", "no one is trapped"); an
+  uncertain-breathing rule ("I don't think he's breathing"); quotes must be the caller's words with field and
+  polarity checks, including negation before a cut-out quote; server-side checks on the reply's structure.
+- **Limit:** a small synthetic set written by us to cover the failure modes we found. 100% means those cases
+  are fixed, not general accuracy or clinical validation. Fact cases use pre-written model outputs.
+
 ## Architecture
 
 ```
