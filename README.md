@@ -14,7 +14,7 @@ Benefit: Life-threat alerts in under a second (before the AI answers), a checkli
 Services:
   - Akamai Cloud Compute (Linode, us-sea): runs the app as a systemd service; /health shows the host name.
   - Akamai Cloud Firewall: only the team's IP reaches ports 22 and 80.
-  - Akamai Managed Database (PostgreSQL): stores each incident, every transcript revision, the model output
+  - Akamai Managed Database (PostgreSQL): stores each incident's latest transcript and analysis (with its revision number), the model output
     and the dispatcher's confirm/reject decisions. History survives an app restart; the revision guard
     (SELECT ... FOR UPDATE) refuses a review made on an outdated revision.
 Inference: Qwen 3 (qwen3-8-27b) on Akamai Cloud Inference, JSON-schema output. Task: extract dispatch facts
@@ -39,6 +39,10 @@ Known limits: English keyword rules only; no speech-to-text; no CAD integration;
   not an agency-approved protocol set; basic-auth login over plain HTTP (no TLS yet), reachable only from the
   firewall's allowed IP; Qwen extraction takes about 13-16 s per call; synthetic data only, not clinically
   validated, no autonomous dispatch or treatment advice.
+  Not yet done (from an external audit): checking that a fact's value matches the quoted words (only the quote,
+  field and polarity are checked); keeping every earlier transcript revision (only the latest is stored, reviews
+  keep their revision number); flagging contradictory caller facts; duplicate/concurrent request control; HTTPS;
+  agency-approved protocol content. Unlabelled transcripts are treated as caller speech and marked unverified.
 ```
 
 ## Architecture

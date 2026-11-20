@@ -90,6 +90,8 @@ ALERT_RULES = [
 ]
 
 
+TRAPPED_DENIAL = re.compile(r"\b(no one|no-one|noone|nobody|nobody'?s|not|isn'?t|aren'?t)\b", re.IGNORECASE)
+UNSURE = re.compile(r"\b(know|sure|think|tell|if|whether)\b", re.IGNORECASE)
 CLAUSE_BREAK = re.compile(r"[,;]|\bbut\b|\balthough\b", re.IGNORECASE)
 SPEAKER = re.compile(r"\b(Caller|Dispatcher|Call[- ]?taker|Operator)\s*:", re.IGNORECASE)
 
@@ -121,23 +123,31 @@ def screen(transcript):
     """
     alerts = []
     for code, label, severity, pattern in ALERT_RULES:
-        found = None
+        mentions = []  # every caller mention of this rule, each with its own negation
         for offset, text in caller_segments(transcript):
-            m = re.search(pattern, text, flags=re.IGNORECASE)
-            if m:
-                found = (offset, text, m)
-                break
-        if not found:
-            continue  # one alert per rule is enough for the dispatcher
-        offset, text, m = found
-        # The sentence around the match decides whether this is a negated mention.
-        start = max(text.rfind(".", 0, m.start()), text.rfind("?", 0, m.start())) + 1
-        window = CLAUSE_BREAK.split(text[start:m.start()])[-1][-40:]  # "No, but his chest hurts" -> "his "
-        alert_is_itself_negative = code in {"NOT_BREATHING", "BREATHING_UNCERTAIN", "UNCONSCIOUS", "PERSON_TRAPPED"}
-        is_negated = (not alert_is_itself_negative) and negated(window)
+            for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+                # The clause before the match decides whether this mention is negated.
+                start = max(text.rfind(".", 0, m.start()), text.rfind("?", 0, m.start())) + 1
+                window = CLAUSE_BREAK.split(text[start:m.start()])[-1][-40:]  # "No, but his chest hurts" -> "his "
+                if code == "PERSON_TRAPPED":
+                    # "No one is trapped" denies; "she can't get out" / "I don't know if anyone is inside" do not
+                    is_negated = bool(TRAPPED_DENIAL.search(window)) and not UNSURE.search(window)
+                elif code in {"NOT_BREATHING", "BREATHING_UNCERTAIN", "UNCONSCIOUS"}:
+                    is_negated = False  # the rule itself is the negative finding
+                else:
+                    is_negated = negated(window)
+                mentions.append((offset, m, is_negated))
+        if not mentions:
+            continue
+        positive = [x for x in mentions if not x[2]]
+        offset, m, is_negated = (positive or mentions)[0]  # any real mention outweighs a denial
+        # a correction: the caller first denied, then mentioned it ("No chest pain. Now his chest hurts.")
+        first_pos = mentions.index(positive[0]) if positive else -1
+        conflict = first_pos > 0 and any(x[2] for x in mentions[:first_pos])
         alerts.append({
-            "code": code, "label": label, "severity": "info" if is_negated else severity,
-            "match": m.group(0), "start": offset + m.start(), "negated": is_negated,
+            "code": code, "label": label + (" (conflicting mentions - confirm)" if conflict else ""),
+            "severity": "info" if is_negated else severity,
+            "match": m.group(0), "start": offset + m.start(), "negated": is_negated, "conflict": conflict,
         })
     order = {"critical": 0, "high": 1, "info": 2}
     return sorted(alerts, key=lambda a: (order[a["severity"]], a["start"]))
