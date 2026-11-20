@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emergency Dispatch Copilot</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6470; --line:#dde1e6;
+          --crit:#b42318; --critbg:#fef3f2; --high:#b54708; --highbg:#fffaeb; --ok:#067647; --okbg:#ecfdf3;
+          --info:#475467; --infobg:#f2f4f7; --accent:#1d4ed8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 20px; background:#101828; color:#fff; }
+  header h1 { font-size:17px; margin:0 12px 0 0; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:99px; background:#344054; color:#e4e7ec; }
+  .badge.good { background:#065f46; color:#d1fae5; } .badge.bad { background:#7a271a; color:#fee4e2; }
+  main { display:grid; grid-template-columns:minmax(320px,1fr) minmax(380px,1.3fr); gap:16px; padding:16px 20px; }
+  @media (max-width:900px){ main{ grid-template-columns:1fr; } }
+  section.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 10px; }
+  h2 small { text-transform:none; letter-spacing:0; font-weight:400; }
+  textarea { width:100%; min-height:220px; font:13px/1.5 ui-monospace,Menlo,monospace; padding:10px; border:1px solid var(--line); border-radius:8px; }
+  button { font:inherit; padding:7px 12px; border-radius:7px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; }
+  .alert { display:flex; gap:10px; align-items:baseline; padding:8px 10px; border-radius:7px; margin-bottom:6px; }
+  .alert.critical { background:var(--critbg); color:var(--crit); font-weight:600; }
+  .alert.high { background:var(--highbg); color:var(--high); }
+  .alert.info { background:var(--infobg); color:var(--info); }
+  .alert code { font-weight:400; color:var(--ink); background:rgba(0,0,0,.05); padding:0 4px; border-radius:4px; }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:6px 4px; border-top:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--muted); font-weight:500; }
+  q { color:var(--muted); font-style:italic; }
+  .pill { font-size:11px; padding:1px 7px; border-radius:99px; background:var(--infobg); }
+  .pill.present { background:var(--okbg); color:var(--ok); } .pill.absent { background:var(--critbg); color:var(--crit); }
+  .reject-reason { color:var(--crit); font-size:12px; }
+  .meta { font:12px ui-monospace,Menlo,monospace; color:var(--muted); }
+  .down { background:var(--critbg); color:var(--crit); padding:8px 10px; border-radius:7px; font-weight:600; }
+  .cardx { border-left:4px solid var(--accent); padding:6px 10px; margin-bottom:10px; background:#f8faff; }
+  .cardx ol { margin:4px 0 4px 18px; padding:0; } .cardx .dis { font-size:11px; color:var(--muted); }
+  .decided { font-size:12px; font-weight:600; } .decided.confirm { color:var(--ok); } .decided.reject { color:var(--crit); }
+  .empty { color:var(--muted); font-style:italic; }
+  details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  pre { white-space:pre-wrap; font-size:11px; background:var(--infobg); padding:8px; border-radius:6px; max-height:240px; overflow:auto; }
+  .note { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Emergency Dispatch Copilot</h1>
+  <span class="badge" id="b-host">host …</span>
+  <span class="badge" id="b-inf">inference …</span>
+  <span class="badge" id="b-db">database …</span>
+  <span class="badge" style="background:#475467">Synthetic demo data only. Decision support: the dispatcher decides.</span>
+</header>
+<main>
+  <div>
+    <section class="card">
+      <h2>Call transcript</h2>
+      <div class="row" id="scenarios"></div>
+      <textarea id="transcript" placeholder="Paste or type the call transcript…"></textarea>
+      <div class="row">
+        <button class="primary" id="analyze">Analyze call</button>
+        <label><input type="checkbox" id="fail"> Simulate AI outage</label>
+        <span class="meta" id="incident-label"></span>
+      </div>
+      <p class="note">Editing the transcript and analyzing again adds a new revision to the same incident. Reviews made on an older revision are refused.</p>
+      <div class="row"><button id="new-incident">New incident</button></div>
+    </section>
+    <section class="card">
+      <h2>Recent incidents <small id="store-label"></small></h2>
+      <div id="recent" class="empty">None yet.</div>
+    </section>
+  </div>
+  <div>
+    <section class="card">
+      <h2>Risk alerts <small>raw keyword screen, runs without AI</small></h2>
+      <div id="alerts" class="empty">Analyze a call to see alerts.</div>
+    </section>
+    <section class="card">
+      <h2>AI extraction <small>Qwen 3 on Akamai Cloud Inference, every fact checked against the transcript</small></h2>
+      <div id="ai-status" class="empty">Not run yet.</div>
+      <div id="accepted"></div>
+      <div id="rejected"></div>
+      <details id="raw-box" hidden><summary>Raw model output</summary><pre id="raw"></pre></details>
+    </section>
+    <section class="card">
+      <h2>Missing facts <small>ask the caller</small></h2>
+      <div id="missing" class="empty">—</div>
+    </section>
+    <section class="card">
+      <h2>Protocol cards <small>fixed text chosen by rules, never written by the model</small></h2>
+      <div id="cards" class="empty">—</div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let current = null;   // last analysis: {incident_id, revision, ...}
+let scenarioKey = null;
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e[k] = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k instanceof Node ? k : String(k));
+  return e;
+}
+function setBadge(id, text, good) { const b = $(id); b.textContent = text; b.className = "badge " + (good ? "good" : "bad"); }
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : r.statusText);
+  return data;
+}
+
+async function loadHealth() {
+  const h = await api("/health");
+  setBadge("b-host", "host: " + h.host, true);
+  setBadge("b-inf", "inference: " + h.inference, !h.inference.startsWith("not"));
+  setBadge("b-db", "database: " + h.database, h.database.startsWith("connected"));
+  $("store-label").textContent = h.database.startsWith("connected") ? "(PostgreSQL, survives restarts)" : "(memory only)";
+}
+
+async function loadScenarios() {
+  const s = await api("/api/scenarios");
+  for (const [key, sc] of Object.entries(s)) {
+    $("scenarios").append(el("button", { onclick: () => { $("transcript").value = sc.transcript; scenarioKey = key; current = null; $("incident-label").textContent = ""; } }, sc.title));
+  }
+}
+
+async function loadRecent() {
+  const rows = await api("/api/incidents");
+  const box = $("recent"); box.replaceChildren(); box.className = rows.length ? "" : "empty";
+  if (!rows.length) { box.textContent = "None yet."; return; }
+  const t = el("table", {}, el("tr", {}, el("th", {}, "#"), el("th", {}, "Scenario"), el("th", {}, "Rev"), el("th", {}, "AI"), el("th", {}, "Updated")));
+  for (const r of rows) t.append(el("tr", {}, el("td", {}, r.id), el("td", {}, r.scenario || "custom"), el("td", {}, r.revision), el("td", {}, r.ai_status), el("td", {}, r.updated_at.slice(11, 19))));
+  box.append(t);
+}
+
+function render(d) {
+  current = d;
+  $("incident-label").textContent = `Incident #${d.incident_id}, revision ${d.revision}` + (d.persisted ? " (saved to PostgreSQL)" : " (memory)");
+
+  const a = $("alerts"); a.replaceChildren(); a.className = "";
+  if (!d.alerts.length) { a.className = "empty"; a.textContent = "No keyword alerts."; }
+  for (const x of d.alerts) a.append(el("div", { class: "alert " + x.severity }, el("span", {}, x.negated ? "Negated: " + x.label : x.label), el("code", {}, x.match)));
+
+  const s = $("ai-status"); s.replaceChildren(); s.className = "";
+  if (d.ai.status !== "ok") {
+    s.append(el("div", { class: "down" }, "AI unavailable: " + d.ai.error + ". Risk alerts and protocol cards above are still valid; ask the missing-fact questions manually."));
+  } else {
+    s.append(el("div", { class: "meta" }, `${d.ai.provider} · model ${d.ai.model} · ${d.ai.latency_ms} ms · ${d.ai.tokens ?? "?"} tokens · id ${d.ai.request_id}`),
+             el("div", { class: "meta" }, `incident type: ${d.incident_type} · ${d.accepted.length} facts accepted · ${d.rejected.length} rejected by validation`));
+  }
+
+  const acc = $("accepted"); acc.replaceChildren();
+  if (d.accepted.length) {
+    const t = el("table", {}, el("tr", {}, el("th", {}, "Fact"), el("th", {}, "Evidence"), el("th", {}, "Dispatcher")));
+    for (const f of d.accepted) {
+      const cell = el("td", {});
+      const mark = (decision) => async () => {
+        try { await api(`/api/incidents/${d.incident_id}/review`, { revision: d.revision, field: f.field, decision });
+              cell.replaceChildren(el("span", { class: "decided " + decision }, decision === "confirm" ? "Confirmed" : "Rejected")); }
+        catch (e) { cell.replaceChildren(el("span", { class: "reject-reason" }, e.message)); }
+      };
+      cell.append(el("button", { onclick: mark("confirm") }, "Confirm"), " ", el("button", { onclick: mark("reject") }, "Reject"));
+      t.append(el("tr", {}, el("td", {}, el("b", {}, f.field.replace(/_/g, " ")), el("br"), f.value, " ", el("span", { class: "pill " + f.polarity }, f.polarity)),
+                          el("td", {}, el("q", {}, f.quote)), cell));
+    }
+    acc.append(el("h2", { style: "margin-top:12px" }, "Accepted (quote found, polarity agrees)"), t);
+  }
+  const rej = $("rejected"); rej.replaceChildren();
+  if (d.rejected.length) {
+    const t = el("table", {});
+    for (const f of d.rejected) t.append(el("tr", {}, el("td", {}, el("s", {}, f.field.replace(/_/g, " ") + ": " + f.value), " ", el("span", { class: "pill" }, f.polarity)),
+                                                 el("td", {}, el("q", {}, f.quote || "(no quote)"), el("div", { class: "reject-reason" }, "Rejected: " + f.reason))));
+    rej.append(el("h2", { style: "margin-top:12px" }, "Rejected: not shown as facts"), t);
+  }
+  $("raw-box").hidden = !d.raw_model_output; $("raw").textContent = JSON.stringify(d.raw_model_output, null, 2);
+
+  const m = $("missing"); m.replaceChildren(); m.className = d.missing.length ? "" : "empty";
+  if (!d.missing.length) m.textContent = "All required facts covered.";
+  else m.append(el("ol", {}, ...d.missing.map(x => el("li", {}, x.ask, " ", el("span", { class: "pill" }, x.field.replace(/_/g, " "))))));
+
+  const c = $("cards"); c.replaceChildren(); c.className = d.cards.length ? "" : "empty";
+  if (!d.cards.length) c.textContent = "No card for these alerts.";
+  for (const k of d.cards) c.append(el("div", { class: "cardx" }, el("b", {}, k.title), el("ol", {}, ...k.steps.map(s => el("li", {}, s))), el("div", { class: "dis" }, k.disclaimer)));
+}
+
+$("analyze").onclick = async () => {
+  const transcript = $("transcript").value.trim();
+  if (!transcript) return;
+  $("analyze").disabled = true; $("analyze").textContent = "Analyzing…";
+  try {
+    render(await api("/api/analyze", { transcript, scenario: scenarioKey, incident_id: current?.incident_id ?? null, simulate_ai_failure: $("fail").checked }));
+    loadRecent(); loadHealth();
+  } catch (e) { $("ai-status").textContent = "Error: " + e.message; }
+  finally { $("analyze").disabled = false; $("analyze").textContent = "Analyze call"; }
+};
+$("new-incident").onclick = () => { current = null; scenarioKey = null; $("transcript").value = ""; $("incident-label").textContent = ""; };
+
+loadHealth().catch(() => {}); loadScenarios(); loadRecent().catch(() => {});
+</script>
+</body>
+</html>
