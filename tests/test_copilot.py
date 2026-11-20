@@ -116,3 +116,17 @@ def test_model_output_validated_and_revision_guard(monkeypatch):
 def test_health():
     h = client.get("/health").json()
     assert h["app"] == "ok" and "memory" in h["database"]
+
+
+def test_cant_get_out_counts_as_trapped():
+    acc, rej = core.validate(FIRE, [{"field": "people_trapped", "value": "can't get out", "polarity": "present",
+                                     "quote": "she can't get out by herself"}])
+    assert acc and not rej
+
+
+def test_screen_endpoint_and_planted_fact(monkeypatch):
+    s = client.post("/api/screen", json={"transcript": MED}).json()
+    assert "NOT_BREATHING" in codes(s["alerts"]) and s["cards"]
+    monkeypatch.setattr(appmod, "extract", lambda t: ({"incident_type": "medical", "facts": []}, {"model": "fake"}))
+    r = client.post("/api/analyze", json={"transcript": MED, "plant_false_fact": True}).json()
+    assert r["rejected"][0]["source"] == "planted test" and not r["accepted"]

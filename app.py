@@ -243,6 +243,16 @@ class AnalyzeBody(BaseModel):
     scenario: str | None = None
     incident_id: int | None = None
     simulate_ai_failure: bool = False
+    plant_false_fact: bool = False  # demo: add one fabricated fact to prove validation rejects it
+
+
+class ScreenBody(BaseModel):
+    transcript: str = Field(min_length=1, max_length=MAX_TRANSCRIPT)
+
+
+# A fact the caller never said, labelled as planted, to show validation on demand.
+PLANTED_FACT = {"field": "bleeding", "value": "heavy bleeding from the head", "polarity": "present",
+                "quote": "he is bleeding heavily from his head", "source": "planted test"}
 
 
 class ReviewBody(BaseModel):
@@ -277,6 +287,13 @@ def scenarios():
     return core.SCENARIOS
 
 
+@app.post("/api/screen")
+def screen_only(body: ScreenBody):
+    """Instant, model-free alerts and cards. The page shows these while Qwen is still working."""
+    alerts = core.screen(body.transcript)
+    return {"alerts": alerts, "cards": core.cards(alerts)}
+
+
 @app.post("/api/analyze")
 def analyze(body: AnalyzeBody):
     transcript = body.transcript.strip()
@@ -288,7 +305,8 @@ def analyze(body: AnalyzeBody):
             raise RuntimeError("simulated inference outage (demo switch)")
         raw, meta = extract(transcript)
         incident_type = raw.get("incident_type", "unknown")
-        accepted, rejected = core.validate(transcript, raw.get("facts", []))
+        facts = list(raw.get("facts", [])) + ([PLANTED_FACT] if body.plant_false_fact else [])
+        accepted, rejected = core.validate(transcript, facts)
         ai.update(meta)
     except Exception as error:
         ai = {"status": "unavailable", "error": str(error).splitlines()[0][:200]}

@@ -53,9 +53,20 @@ def _tokens(text):
     return _norm(text).split()
 
 
-def negated(text):
-    """True if the text carries a negation cue."""
-    return any(t in NEGATION_WORDS or t in NEGATIVE_FORMS for t in _tokens(text))
+# Phrases whose negation word affirms the field rather than denying it ("can't get out" = trapped).
+AFFIRMING_PHRASES = {
+    "people_trapped": ["can't get out", "cant get out", "cannot get out", "unable to get out", "can't leave",
+                       "won't come out", "not out yet", "not able to get out"],
+    "breathing": ["can't stop breathing hard"],
+}
+
+
+def negated(text, field=None):
+    """True if the text carries a negation cue, ignoring phrases that affirm this field."""
+    norm = _norm(text)
+    for phrase in AFFIRMING_PHRASES.get(field, []):
+        norm = norm.replace(_norm(phrase), " ")
+    return any(t in NEGATION_WORDS or t in NEGATIVE_FORMS for t in norm.split())
 
 
 # ---------------------------------------------------------------- independent risk screen
@@ -177,12 +188,14 @@ def validate(transcript, facts):
             elif not any(k in nq for k in keywords):
                 reason = f"quote does not mention {field.replace('_', ' ')}"
             if reason is None and keywords is not None:
-                neg = negated(quote)
+                neg = negated(quote, field)
                 if polarity == "present" and neg:
                     reason = "polarity conflict: quote is negated but fact says present"
                 elif polarity == "absent" and not neg:
                     reason = "polarity conflict: quote is affirmative but fact says absent"
         item = {"field": field, "value": value, "polarity": polarity, "quote": quote}
+        if fact.get("source"):
+            item["source"] = fact["source"]
         (rejected if reason else accepted).append({**item, "reason": reason} if reason else item)
     return accepted, rejected
 
