@@ -1,5 +1,6 @@
 """Run:  uv run --with pytest --with httpx --with fastapi --with openai --with "psycopg[binary]" --with python-dotenv pytest -q
 No network and no key needed: the model call is replaced with fixed outputs."""
+import json
 import os
 import sys
 from pathlib import Path
@@ -190,3 +191,55 @@ def test_unknown_polarity_stays_missing():
                            [{"field": "breathing", "value": "unsure", "polarity": "unknown",
                              "quote": "I'm not sure if he's breathing"}])
     assert acc and "breathing" in {m["field"] for m in core.missing("medical", acc)}
+
+
+# ---------------- model reply checks (Prompt 4)
+
+import types  # noqa: E402
+
+
+def _fake_reply(monkeypatch, content, finish="stop"):
+    msg = types.SimpleNamespace(content=content)
+    resp = types.SimpleNamespace(choices=[types.SimpleNamespace(finish_reason=finish, message=msg)],
+                                 usage=None, model="qwen3-8-27b", id="chatcmpl-test")
+    fake = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=lambda **k: resp)))
+    monkeypatch.setattr(appmod, "_client", fake)
+
+
+def test_invalid_json_is_invalid_output_not_unavailable(monkeypatch):
+    _fake_reply(monkeypatch, "not json at all")
+    r = client.post("/api/analyze", json={"transcript": MED}).json()
+    assert r["ai"]["status"] == "invalid_output" and r["ai"]["error"] == "reply is not valid JSON"
+    assert r["ai"]["request_id"] == "chatcmpl-test" and not r["accepted"]
+    assert "NOT_BREATHING" in codes(r["alerts"]) and r["cards"]
+
+
+def test_cut_off_reply_is_invalid_output(monkeypatch):
+    _fake_reply(monkeypatch, '{"incident_type":"medical","facts":[', finish="length")
+    r = client.post("/api/analyze", json={"transcript": MED}).json()
+    assert r["ai"]["status"] == "invalid_output" and "cut off" in r["ai"]["error"]
+    assert "NOT_BREATHING" in codes(r["alerts"])
+
+
+def test_malformed_fact_is_rejected_with_reason(monkeypatch):
+    _fake_reply(monkeypatch, json.dumps({"incident_type": "medical", "facts": [
+        "breathing absent",
+        {"field": "breathing", "value": "not breathing", "polarity": "absent", "quote": 5},
+        {"field": "breathing", "value": "not breathing", "polarity": "maybe", "quote": "He's not breathing"},
+        {"field": "breathing", "value": "not breathing", "polarity": "absent", "quote": "He's not breathing"}]}))
+    r = client.post("/api/analyze", json={"transcript": MED}).json()
+    assert r["ai"]["status"] == "ok"
+    assert [f["field"] for f in r["accepted"]] == ["breathing"]
+    reasons = [f["reason"] for f in r["rejected"]]
+    assert reasons == ["malformed model output: fact is not an object", "malformed model output: quote is not text",
+                       "malformed model output: polarity 'maybe' is not allowed"]
+
+
+def test_unknown_incident_type_is_corrected(monkeypatch):
+    _fake_reply(monkeypatch, json.dumps({"incident_type": "banana", "facts": []}))
+    r = client.post("/api/analyze", json={"transcript": FIRE}).json()
+    assert r["ai"]["status"] == "ok" and r["incident_type"] == "fire"  # falls back to the screen's view
+    assert "not allowed" in r["ai"]["notes"][0]
+    _fake_reply(monkeypatch, json.dumps({"incident_type": "medical", "facts": "none"}))
+    r = client.post("/api/analyze", json={"transcript": MED}).json()
+    assert r["ai"]["status"] == "invalid_output" and r["ai"]["error"] == "'facts' is not a list"
