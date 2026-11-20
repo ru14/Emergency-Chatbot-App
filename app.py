@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "openai>=1.40", "psycopg[binary]>=3.2", "python-dotenv>=1.0"]
+# dependencies = ["fastapi>=0.115", "uvicorn>=0.30", "openai>=3.51,<4", "psycopg[binary]>=3.2", "python-dotenv>=1.0"]
 # ///
 """Emergency Dispatch Copilot: decision support for a human dispatcher.
 
@@ -64,6 +64,14 @@ SYSTEM_PROMPT = (
 )
 
 
+class InvalidReply(Exception):
+    """Qwen answered, but the reply cannot be used. Carries the call's metadata as proof it was a real call."""
+
+    def __init__(self, reason, meta):
+        super().__init__(reason)
+        self.meta = meta
+
+
 def extract(transcript):
     """One Qwen 3 call returning (raw model JSON, metadata). Raises on any failure."""
     if not (BASE_URL and API_KEY):
@@ -79,15 +87,18 @@ def extract(transcript):
         max_tokens=1200,
     )
     latency_ms = round((time.perf_counter() - started) * 1000)
-    choice = response.choices[0]
-    if choice.finish_reason != "stop":
-        raise RuntimeError(f"model reply stopped early ({choice.finish_reason})")
-    text = re.sub(r"<think>.*?</think>", "", choice.message.content or "", flags=re.DOTALL).strip()
-    data = json.loads(text)
     usage = response.usage
     meta = {"provider": "Akamai Cloud Inference", "endpoint": BASE_URL, "model": response.model,
             "request_id": response.id, "latency_ms": latency_ms,
             "tokens": usage.total_tokens if usage else None}
+    choice = response.choices[0]
+    if choice.finish_reason != "stop":
+        raise InvalidReply(f"reply was cut off ({choice.finish_reason})", meta)
+    text = re.sub(r"<think>.*?</think>", "", choice.message.content or "", flags=re.DOTALL).strip()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise InvalidReply("reply is not valid JSON", meta) from None
     return data, meta
 
 
@@ -304,11 +315,20 @@ def analyze(body: AnalyzeBody):
         if body.simulate_ai_failure:
             raise RuntimeError("simulated inference outage (demo switch)")
         raw, meta = extract(transcript)
-        incident_type = raw.get("incident_type", "unknown")
-        facts = list(raw.get("facts", [])) + ([PLANTED_FACT] if body.plant_false_fact else [])
+        try:
+            incident_type, facts, malformed, notes = core.check_extraction(raw)
+        except core.InvalidModelOutput as error:
+            raise InvalidReply(str(error), meta) from None
+        facts += [PLANTED_FACT] if body.plant_false_fact else []
         accepted, rejected = core.validate(transcript, facts)
+        rejected = malformed + rejected
         ai.update(meta)
-    except Exception as error:
+        if notes:
+            ai["notes"] = notes
+    except InvalidReply as error:  # the model answered; its reply failed our checks
+        ai = {"status": "invalid_output", "error": str(error), **error.meta}
+        accepted, rejected, incident_type = [], [], "unknown"
+    except Exception as error:  # no usable answer: timeout, network, HTTP error, missing key, simulated outage
         ai = {"status": "unavailable", "error": str(error).splitlines()[0][:200]}
     if incident_type == "unknown":  # fall back to the screen's view so missing-fact prompts still work
         codes = {a["code"] for a in alerts if not a["negated"]}

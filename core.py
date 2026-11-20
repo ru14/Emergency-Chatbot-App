@@ -192,6 +192,56 @@ EXTRACTION_SCHEMA = {
 }
 
 
+class InvalidModelOutput(ValueError):
+    """The model answered, but its reply does not have the shape EXTRACTION_SCHEMA requires."""
+
+
+def check_extraction(raw):
+    """Server-side check of the model reply against EXTRACTION_SCHEMA. Never trusts the model's own formatting.
+
+    Returns (incident_type, facts, malformed, notes):
+      facts      well-formed fact objects, still to be checked against the transcript by validate()
+      malformed  fact entries that break the schema, each with a rejection reason
+      notes      problems that were corrected (e.g. an incident type outside the allowed list)
+    Raises InvalidModelOutput when the reply as a whole is unusable.
+    """
+    if not isinstance(raw, dict):
+        raise InvalidModelOutput("reply is not a JSON object")
+    facts = raw.get("facts")
+    if not isinstance(facts, list):
+        raise InvalidModelOutput("'facts' is not a list")
+    notes = []
+    incident_type = raw.get("incident_type")
+    allowed_types = EXTRACTION_SCHEMA["properties"]["incident_type"]["enum"]
+    if incident_type not in allowed_types:
+        notes.append(f"incident type {str(incident_type)[:30]!r} is not allowed; treated as unknown")
+        incident_type = "unknown"
+    item_schema = EXTRACTION_SCHEMA["properties"]["facts"]["items"]
+    good, malformed = [], []
+    for item in facts:
+        problem = None
+        if not isinstance(item, dict):
+            problem = "fact is not an object"
+        else:
+            for key in item_schema["required"]:
+                if not isinstance(item.get(key), str):
+                    problem = f"{key} is not text"
+                    break
+            else:
+                for key, spec in item_schema["properties"].items():
+                    if "enum" in spec and item[key] not in spec["enum"]:
+                        problem = f"{key} {item[key][:30]!r} is not allowed"
+                        break
+        if problem:
+            d = item if isinstance(item, dict) else {}
+            malformed.append({"field": str(d.get("field", "?"))[:40], "value": str(d.get("value", ""))[:80],
+                              "polarity": str(d.get("polarity", ""))[:20], "quote": str(d.get("quote", ""))[:200],
+                              "reason": f"malformed model output: {problem}"})
+        else:
+            good.append({k: item[k] for k in item_schema["required"]})
+    return incident_type, good, malformed, notes
+
+
 # ---------------------------------------------------------------- evidence and polarity validation
 
 def _clause_before(segment_text, nq):

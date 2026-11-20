@@ -159,7 +159,8 @@ async function loadRecent() {
 }
 
 function showAiBadge(ai) {
-  setBadge("b-inf", ai.status === "ok" ? `inference: ok (${(ai.latency_ms / 1000).toFixed(1)} s, ${ai.model})` : "inference: unavailable", ai.status === "ok");
+  setBadge("b-inf", ai.status === "ok" ? `inference: ok (${(ai.latency_ms / 1000).toFixed(1)} s, ${ai.model})`
+    : ai.status === "invalid_output" ? "inference: reply rejected" : "inference: unavailable", ai.status === "ok");
 }
 
 const SPEAKER = /\b(Caller|Dispatcher|Call[- ]?taker|Operator)\s*:/gi;  // same labels the server screens by
@@ -190,7 +191,7 @@ function render(d, reviews = []) {
     el("span", { class: "pill" }, d.incident_type || "unknown"),
     el("span", {}, `revision ${d.revision}`),
     el("span", { class: "pill " + (d.persisted ? "present" : "") }, d.persisted ? "saved to PostgreSQL" : "memory only"),
-    el("span", { class: "pill " + (d.ai.status === "ok" ? "present" : "absent") }, d.ai.status === "ok" ? "AI ok" : "AI unavailable"),
+    el("span", { class: "pill " + (d.ai.status === "ok" ? "present" : "absent") }, d.ai.status === "ok" ? "AI ok" : d.ai.status === "invalid_output" ? "AI reply rejected" : "AI unavailable"),
     el("span", { class: "meta" }, `${d.alerts.filter(a => !a.negated).length} alerts · ${d.missing.length} missing facts`));
   lastAi = d.ai; showAiBadge(d.ai);
   if (d.transcript) renderSpeakers(d.transcript);
@@ -200,11 +201,15 @@ function render(d, reviews = []) {
   renderAlerts(d.alerts, d.cards);
 
   const s = $("ai-status"); s.replaceChildren(); s.className = "";
-  if (d.ai.status !== "ok") {
+  if (d.ai.status === "invalid_output") {
+    s.append(el("div", { class: "down" }, "AI reply rejected: " + d.ai.error + ". No model facts are used. Risk alerts and protocol cards are still valid; ask the missing-fact questions manually."),
+             el("div", { class: "meta" }, `${d.ai.provider} · model ${d.ai.model} · ${d.ai.latency_ms} ms · id ${d.ai.request_id}`));
+  } else if (d.ai.status !== "ok") {
     s.append(el("div", { class: "down" }, "AI unavailable: " + d.ai.error + ". Risk alerts and protocol cards above are still valid; ask the missing-fact questions manually."));
   } else {
     s.append(el("div", { class: "meta" }, `${d.ai.provider} · model ${d.ai.model} · ${d.ai.latency_ms} ms · ${d.ai.tokens ?? "?"} tokens · id ${d.ai.request_id}`),
-             el("div", { class: "meta" }, `incident type: ${d.incident_type} · ${d.accepted.length} facts accepted · ${d.rejected.length} rejected by validation`));
+             el("div", { class: "meta" }, `incident type: ${d.incident_type} · ${d.accepted.length} facts accepted · ${d.rejected.length} rejected by validation`),
+             ...(d.ai.notes || []).map(n => el("div", { class: "reject-reason" }, "Corrected: " + n)));
   }
 
   const acc = $("accepted"); acc.replaceChildren();
